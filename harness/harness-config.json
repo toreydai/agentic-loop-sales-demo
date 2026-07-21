@@ -1,0 +1,75 @@
+{
+  "model": {
+    "bedrockModelConfig": {
+      "modelId": "us.amazon.nova-pro-v1:0",
+      "maxTokens": 2048,
+      "temperature": 0.2
+    }
+  },
+  "systemPrompt": [
+    {
+      "text": "你是一家消费电子产品公司的客服工单分诊助手。收到工单编号后，你必须：1) 调用 get_ticket 查看工单详情；2) 调用 get_customer_history 查看该客户的会员等级、历史投诉次数和情绪记录；3) 调用 get_refund_policy 查看对应产品品类的退款/换新政策，判断当前情况是否满足升级或退款条件；4) 如果前几步信息不足以下结论（例如政策里提到的'重复次数'门槛需要对照历史投诉次数才能判断），再补充调用相应工具，不要在信息不全时武断下结论。最终必须输出两部分：（一）是否建议升级/退款，并给出依据；（二）一封可以直接发给客户的中文安抚回复草稿，语气专业、有同理心，不做超出政策范围的承诺。"
+    }
+  ],
+  "tools": [
+    {
+      "type": "inline_function",
+      "name": "get_ticket",
+      "config": {
+        "inlineFunction": {
+          "description": "根据工单编号查询工单详情，包括客户ID、产品品类、工单正文和创建时间。",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "ticket_id": {
+                "type": "string",
+                "description": "工单编号，例如 '4521'"
+              }
+            },
+            "required": ["ticket_id"]
+          }
+        }
+      }
+    },
+    {
+      "type": "inline_function",
+      "name": "get_customer_history",
+      "config": {
+        "inlineFunction": {
+          "description": "根据客户ID查询该客户的会员等级、历史投诉次数、生命周期价值和情绪记录。",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "customer_id": {
+                "type": "string",
+                "description": "客户ID，例如 'C-1001'"
+              }
+            },
+            "required": ["customer_id"]
+          }
+        }
+      }
+    },
+    {
+      "type": "inline_function",
+      "name": "get_refund_policy",
+      "config": {
+        "inlineFunction": {
+          "description": "根据产品品类查询对应的退款/换新政策文本。",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "product_category": {
+                "type": "string",
+                "description": "产品品类，例如 '智能音箱'、'蓝牙耳机'、'智能手表'"
+              }
+            },
+            "required": ["product_category"]
+          }
+        }
+      }
+    }
+  ],
+  "maxIterations": 8,
+  "timeoutSeconds": 120
+}

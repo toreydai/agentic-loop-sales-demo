@@ -1,0 +1,23 @@
+{
+  "C-1001": {
+    "tier": "白金会员",
+    "tenure_years": 3,
+    "past_complaints_12mo": 4,
+    "lifetime_value_usd": 8200,
+    "sentiment_history": "过去两次投诉都提到过'考虑换品牌'，客服备注建议重点维护"
+  },
+  "C-1002": {
+    "tier": "普通会员",
+    "tenure_years": 0.5,
+    "past_complaints_12mo": 0,
+    "lifetime_value_usd": 120,
+    "sentiment_history": "无历史投诉记录，本次是首次联系客服"
+  },
+  "C-1003": {
+    "tier": "黄金会员",
+    "tenure_years": 1.5,
+    "past_complaints_12mo": 1,
+    "lifetime_value_usd": 1450,
+    "sentiment_history": "一个月前反馈过同一台设备的类似问题，当时客服判定为软件缓存问题，重置后已解决"
+  }
+}
