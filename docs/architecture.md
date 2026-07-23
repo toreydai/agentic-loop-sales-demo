@@ -26,15 +26,25 @@
 
 给销售的一句话卖点：**"这不是关键词分类，是真正综合多个信息源的判断加草拟——现在没有任何工单系统能一键做到这一步。"**
 
-## 技术架构：AgentCore Harness + CloudWatch GenAI Observability Trace（零代码）
+## 技术架构：AgentCore Runtime + Strands Agents SDK + CloudWatch GenAI Observability Trace
 
-技术路线用 **AgentCore Harness**——AWS 官方文档里 Harness 的介绍原话就是"managed agent loop: reasoning, tool selection, action execution, response streaming"，比 Action Group 这个说法更贴合"Loop"这个培训主题本身，而且能直接复用 `agentcore-workshop` demo05 已跑通的环境。
+最初的落地路线用的是 **AgentCore Harness**——托管的黑盒 agent loop，零代码但循环本身不可见。后来评估下来换成了 **AgentCore Runtime + Strands Agents SDK**：Runtime 只负责托管容器（弹性、鉴权、观测这些"底座"能力），循环本身用 Strands 的 `Agent` 显式写出来，现场除了看 Trace 面板，还能直接打开 `agent/agent.py` 指着几十行代码讲"Perceive→Plan→Act→Observe→Respond 具体是哪几行"——这对"讲清楚 loop 怎么工作"这个培训定位比黑盒配置更有说服力。两条路线的详细取舍见下表。
 
 具体路线：
 
-- 通过 Harness 控制台的 Quick Create 向导（或声明式的 `create-harness` 配置）指定模型 + 工具，零代码、不写编排逻辑。
-- 工具接入用内置 `inline_function` 连一套**模拟的工单系统数据**（工单内容、客户历史、退款政策规则），只读查询。
-- Trace 可视化走 **CloudWatch GenAI Observability** 的 Bedrock AgentCore Observability（All traces / Trajectory / Messages 面板），现场点开真实的多步调用记录逐步指给客户看，全程点鼠标、不敲命令。
+- 三个工具（`get_ticket`/`get_customer_history`/`get_refund_policy`）用 `@tool` 装饰器写成普通 Python 函数，跟着 Agent 一起打包进容器，运行在 Runtime 托管环境里——不再需要客户端脚本充当"外部工具执行者"。
+- Agent 代码本身只有一个 `strands.Agent` 实例 + 一段 system prompt，循环控制（要不要继续调用工具、什么时候该收敛给结论）完全交给 Strands 的 event loop，不是手写 `while` 循环。
+- Trace 可视化仍然走 **CloudWatch GenAI Observability** 的 Bedrock AgentCore Observability（All traces / Trajectory / Messages 面板），Runtime 和 Harness 用的是同一套 OTel 观测管线，现场点击路径基本不变。
+
+### Harness vs Runtime 取舍对比
+
+| | AgentCore Harness（旧方案） | AgentCore Runtime + Strands（现方案） |
+|---|---|---|
+| 循环逻辑 | 托管黑盒，只能看 Trace 反推 | `agent/agent.py` 里显式可见，能直接讲代码 |
+| 工具执行位置 | 客户端（`inline_function` 设计如此） | 容器内，随 Agent 一起跑 |
+| 部署产物 | 一份 JSON 配置 | 容器镜像（需要 Docker 构建 + 推送 ECR） |
+| 自定义能力 | 受限于 Harness 暴露的配置项 | 可自由定制重试、终止条件、多 Agent 编排等 |
+| 适合场景 | 快速验证、纯配置演示 | 需要"讲清楚循环怎么工作"的培训场景 |
 
 ### 架构图
 
@@ -42,24 +52,25 @@
 %%{init: {'flowchart': {'curve': 'stepAfter', 'nodeSpacing': 60, 'rankSpacing': 80}}}%%
 graph TD
     Sales(["销售 / 客户<br/>现场提问"])
-    Sales -->|"看一下工单 #4521，判断该不该升级…"| Harness
+    Sales -->|"看一下工单 #4521，判断该不该升级…"| Client
 
     subgraph AWS["AWS 账号（us-west-2）"]
-        Harness["AgentCore Harness<br/>Nova Pro（主选）· kimi-k2-thinking（备选）"]
-        Client["run_demo.py<br/>inline_function 客户端"]
-        Data[("模拟数据<br/>tickets · customers · refund_policy")]
-        Observe{"信息够了吗？<br/>Observe"}
+        Client["run_demo.py<br/>纯客户端，只发问题+打印流式回复"]
+        Runtime["AgentCore Runtime 容器<br/>Strands Agent（Nova Pro）"]
+        Data[("模拟数据<br/>tickets · customers · refund_policy<br/>容器内本地文件")]
+        Observe{"信息够了吗？<br/>Observe（Strands event loop）"}
         CW["CloudWatch GenAI Observability<br/>Transaction Search"]
 
-        Harness -->|toolUse| Client
-        Client -->|查询| Data
-        Data -->|结果| Client
-        Client -->|toolResult| Observe
-        Observe -.->|不够，继续查| Harness
-        Harness -->|OTel trace| CW
+        Client -->|invoke_agent_runtime| Runtime
+        Runtime -->|调用工具| Data
+        Data -->|结果| Runtime
+        Runtime -.->|不够，继续查| Observe
+        Observe -.->|继续| Runtime
+        Runtime -->|OTel trace| CW
     end
 
     Observe ==>|够了| Result(["最终输出<br/>结论 + 回复草稿"])
+    Runtime -->|SSE 流式| Client
     CW -->|"All traces / Trajectory / Messages<br/>现场点鼠标讲解"| Result
 
     classDef actor fill:#fef3c7,stroke:#d97706,stroke-width:2px,color:#1f2937,font-weight:bold;
@@ -70,7 +81,7 @@ graph TD
     classDef decision fill:#fff7ed,stroke:#ea580c,stroke-width:2px,color:#1f2937;
 
     class Sales actor;
-    class Harness,Client compute;
+    class Runtime,Client compute;
     class Data datastore;
     class CW observability;
     class Result result;
@@ -82,21 +93,19 @@ graph TD
 | 组件 | 文件 | 作用 |
 |---|---|---|
 | 模拟数据集 | `data/tickets.json`、`data/customers.json`、`data/refund_policy.json` | 3 个工单覆盖"明显该升级"（#4521）、"明显不该升级"（#4522）、"边界情况"（#4523）三种对照 |
-| Harness 执行角色 | `infra/harness-role.yaml` | CloudFormation 模板（声明式），只包含 inline_function 场景所需的最小权限，不含 Gateway/Browser/Code Interpreter 权限 |
-| Harness 生产配置 | `harness/harness-config.json` | Nova Pro 主选模型的 `create-harness` 声明式输入 |
-| Harness 备选配置 | `harness/harness-config-kimi.json` | kimi-k2-thinking 备选模型配置，system prompt 加了防止提前终止的强制规则 |
-| 调用脚本 | `scripts/run_demo.py` | 因为三个工具是 `inline_function` 类型，按 AgentCore 的设计，工具调用在**客户端**执行、不在 Harness 托管环境里跑——这个脚本就是那个"客户端"，负责在模型发起调用时查本地模拟数据、把结果传回去，循环本身仍由 Harness 控制。这不是绕开声明式路线的手写编排，而是 `inline_function` 这个工具类型本身要求的用法 |
+| Runtime 执行角色 + ECR 仓库 | `infra/runtime-role.yaml` | CloudFormation 模板（声明式），最小权限（Bedrock 调用、ECR 拉镜像、日志、X-Ray、workload identity），不含 AgentCore Memory 权限（本场景无需跨会话记忆） |
+| Agent 代码 | `agent/agent.py` | Strands `Agent` + 三个 `@tool` 函数，`BedrockAgentCoreApp` 的 `@app.entrypoint` 把 `agent.stream_async` 的事件转成 SSE 流式返回 |
+| 容器构建 | `agent/Dockerfile`、`agent/requirements.txt` | ARM64 镜像（AgentCore Runtime 要求），构建上下文是仓库根目录，同时打包 `data/`；`CMD` 用 `opentelemetry-instrument` 包装启动，配合 `requirements.txt` 里的 `aws-opentelemetry-distro` 做自动 OTel 埋点——这一步不是可选项，少了它 Runtime 不会自动上报任何 trace（详见 [testing.md](testing.md) 里踩过的坑） |
+| Runtime 声明式配置 | `runtime/runtime-config.json` | `create-agent-runtime` 的输入：容器镜像地址、网络模式（PUBLIC）、协议（HTTP） |
+| 调用脚本 | `scripts/run_demo.py` | 纯客户端：发一次问题，解析 `invoke_agent_runtime` 返回的 SSE 流并实时打印文本；循环本身完全在 Runtime 容器里跑完，脚本不再处理工具调用 |
 | 控制台点击脚本 | `docs/console-walkthrough.md` | 现场演示时 CloudWatch 控制台的逐屏点击路径 |
 
 ## 模型选型（结论）
 
 原计划用 Claude，但 Bedrock 调用被账号级地域限制挡住（"Access to Anthropic models is not allowed from unsupported countries"，与 API 请求指定的区域无关）。这个限制在正式培训要用的账号上反复复测确认持续存在，**Claude 在这次培训里确定不可用**。
 
-- **Amazon Nova Pro**（`us.amazon.nova-pro-v1:0`）—— **确定为正式培训主选模型**。稳定、实测全流程仅需 17-20 秒，远低于现场时间预算。
-- **kimi-k2-thinking**（`moonshot.kimi-k2-thinking`，配合 `harness/harness-config-kimi.json` 里加强版 system prompt）—— **验证稳定的备选模型**。
-- `kimi-k2.5`（非 thinking 版）—— **不建议用于现场演示**，即使调整 system prompt 也只是把"提前终止"的不稳定现象从一个工单案例挪到另一个，无法根治。
-
-详细测试过程、复现次数、失败模式见 [testing.md](testing.md#模型稳定性测试)。
+- **Amazon Nova Pro**（`us.amazon.nova-pro-v1:0`）—— 这次改造后**唯一实测过的模型**，#4521/#4522/#4523 三个对照工单各跑 1 次，判断方向全部正确，全流程 7.9-10.4 秒。详见 [testing.md](testing.md)。
+- kimi-k2-thinking 此前在 **Harness** 方案下验证过稳定（见该方案的历史测试记录），但 Runtime + Strands 是完全不同的循环实现，**尚未在这套新方案下复测**，如果要切回 Kimi 系列模型，必须重新走一遍模型稳定性测试，不能直接复用 Harness 时代的结论。
 
 ## 演示流程设计（15 分钟，衔接前面 15 分钟 PPT）
 
@@ -105,7 +114,7 @@ graph TD
 2. **现场演示**（9-10 分钟）——真实跑一遍工单场景，在 Trace 面板里逐步讲解 Perceive→Plan→Act→Observe→Respond 5 个阶段（具体点击路径见 [console-walkthrough.md](console-walkthrough.md)）；"循环怎么知道该停"就在讲 Observe 那一步时顺带说清楚，不单独留时间段。
 3. **收尾 + 卖点重申**（2-3 分钟）——重复那句话术卖点，预告"常见问题详见发给你们的 battle card"，留 1-2 个问题的现场问答缓冲。
 
-时间风险评估：模型推理本身只要 17-20 秒（见 [testing.md](testing.md#性能基准)），9-10 分钟预算里的瓶颈和不确定性全部来自"讲解 CloudWatch 控制台"这一步，不是模型响应慢。
+时间风险评估：模型推理本身只要 8-10 秒（见 [testing.md](testing.md#性能基准)），9-10 分钟预算里的瓶颈和不确定性全部来自"讲解 CloudWatch 控制台"这一步，不是模型响应慢。
 
 风险控制：备好一份录屏/截图作为 backup（见 `docs/screenshots/`），防止现场网络或权限问题导致 live demo 失败。
 
@@ -113,6 +122,6 @@ graph TD
 
 - **"这和普通 chatbot 有什么区别？"** → 普通 chatbot 一问一答、答案基于训练时的记忆；Agent Loop 会自己规划步骤、调用真实系统查最新数据、判断信息够不够，不够会自己继续查，最后才给结论。
 - **"这不就是关键词分类/工单路由规则引擎吗？"** → 规则引擎只能匹配预先想到的固定条件；这里是模型综合客户等级、历史投诉、退款政策、情绪强度等多个维度做判断，遇到规则引擎没覆盖的边界情况也能给出有依据的结论，而不是命中不了规则就转人工。
-- **"客户隐私资料会不会被乱用/泄露给模型训练？"** → 强调 Harness 只做只读查询、工具访问范围显式配置（allowedTools），且模型侧不会把调用数据用于训练；如果客户对数据驻留/合规有更高要求，还可以走 VPC 私有网络模式。这是客服场景比账单场景更容易被追问的点，必须准备好。
-- **"这个只能用来做工单分诊吗？"** → 强调这是通用的 Agent Loop 模式，换一套工具（Gateway/MCP 对接 CRM、运维系统、供应链系统等）就能迁移到任何"多步骤查证 + 决策"的业务场景，工单只是今天挑的一个好懂的例子。
-- **"要开发多久才能给我们客户定制一个？"** → 如实说明：核心壁垒不在"循环"本身（AgentCore Harness 已经托管），而在于给每个客户接入他们自己的业务系统（Gateway/MCP 的对接工作），这部分需要具体评估工作量，避免现场夸口。
+- **"客户隐私资料会不会被乱用/泄露给模型训练？"** → 强调 Agent 代码里的工具只做只读查询、容器运行在 Runtime 的隔离环境里，且模型侧不会把调用数据用于训练；如果客户对数据驻留/合规有更高要求，Runtime 支持 VPC 网络模式。这是客服场景比账单场景更容易被追问的点，必须准备好。
+- **"这个只能用来做工单分诊吗？"** → 强调这是通用的 Agent Loop 模式，换一套工具就能迁移到任何"多步骤查证 + 决策"的业务场景，工单只是今天挑的一个好懂的例子。
+- **"要开发多久才能给我们客户定制一个？"** → 如实说明：核心壁垒不在"循环"本身（Strands 的 event loop 已经封装好），而在于给每个客户接入他们自己的业务系统（把工具函数换成真实 API 调用，或接入 Gateway/MCP），这部分需要具体评估工作量，避免现场夸口。

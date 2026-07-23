@@ -1,0 +1,16 @@
+{
+  "agentRuntimeArtifact": {
+    "containerConfiguration": {
+      "containerUri": "<ACCOUNT_ID>.dkr.ecr.us-west-2.amazonaws.com/agentic-loop-sales-demo:latest"
+    }
+  },
+  "networkConfiguration": {
+    "networkMode": "PUBLIC"
+  },
+  "protocolConfiguration": {
+    "serverProtocol": "HTTP"
+  },
+  "environmentVariables": {
+    "AGENT_OBSERVABILITY_ENABLED": "true"
+  }
+}

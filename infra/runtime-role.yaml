@@ -1,17 +1,24 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Execution role for the agentic-loop-sales-demo AgentCore Harness (ticket-triage scenario, inline_function tools only)
+Description: ECR repository + execution role for the agentic-loop-sales-demo AgentCore Runtime (Strands Agent ticket-triage scenario)
 
 Parameters:
-  HarnessAgentName:
+  RuntimeName:
     Type: String
     Default: SalesLoopTicketDemo
-    Description: Must match the harnessName used in create-harness, used to scope the workload-identity resource.
+    Description: Must match the agentRuntimeName used in create-agent-runtime, used to scope the workload-identity resource.
 
 Resources:
-  HarnessExecutionRole:
+  RepositoryEcr:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: agentic-loop-sales-demo
+      ImageScanningConfiguration:
+        ScanOnPush: true
+
+  RuntimeExecutionRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: agentic-loop-sales-demo-harness-role
+      RoleName: agentic-loop-sales-demo-runtime-role
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -20,7 +27,7 @@ Resources:
               Service: bedrock-agentcore.amazonaws.com
             Action: sts:AssumeRole
       Policies:
-        - PolicyName: HarnessExecutionPolicy
+        - PolicyName: RuntimeExecutionPolicy
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
@@ -32,16 +39,17 @@ Resources:
                 Resource:
                   - arn:aws:bedrock:*::foundation-model/*
                   - !Sub arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:*
-              - Sid: EcrPublicTokenAccess
+              - Sid: EcrAuthToken
                 Effect: Allow
                 Action:
-                  - ecr-public:GetAuthorizationToken
+                  - ecr:GetAuthorizationToken
                 Resource: '*'
-              - Sid: StsForEcrPublicPull
+              - Sid: EcrImagePull
                 Effect: Allow
                 Action:
-                  - sts:GetServiceBearerToken
-                Resource: '*'
+                  - ecr:BatchGetImage
+                  - ecr:GetDownloadUrlForLayer
+                Resource: !GetAtt RepositoryEcr.Arn
               - Sid: XRayTracingAccess
                 Effect: Allow
                 Action:
@@ -81,17 +89,10 @@ Resources:
                   - bedrock-agentcore:GetWorkloadAccessTokenForJWT
                 Resource:
                   - !Sub arn:aws:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:workload-identity-directory/default
-                  - !Sub arn:aws:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:workload-identity-directory/default/workload-identity/harness_${HarnessAgentName}-*
-              - Sid: AgentCoreManagedMemory
-                Effect: Allow
-                Action:
-                  - bedrock-agentcore:CreateEvent
-                  - bedrock-agentcore:DeleteEvent
-                  - bedrock-agentcore:GetEvent
-                  - bedrock-agentcore:ListEvents
-                  - bedrock-agentcore:RetrieveMemoryRecords
-                Resource: !Sub arn:aws:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:memory/*
+                  - !Sub arn:aws:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:workload-identity-directory/default/workload-identity/${RuntimeName}-*
 
 Outputs:
   RoleArn:
-    Value: !GetAtt HarnessExecutionRole.Arn
+    Value: !GetAtt RuntimeExecutionRole.Arn
+  RepositoryUri:
+    Value: !GetAtt RepositoryEcr.RepositoryUri
