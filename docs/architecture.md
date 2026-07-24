@@ -49,7 +49,7 @@
 ### 架构图
 
 ```mermaid
-%%{init: {'flowchart': {'curve': 'stepAfter', 'nodeSpacing': 60, 'rankSpacing': 80}}}%%
+%%{init: {'flowchart': {'curve': 'basis', 'nodeSpacing': 60, 'rankSpacing': 80}}}%%
 graph TD
     Sales(["销售 / 客户<br/>现场提问"])
     Sales -->|"看一下工单 #4521，判断该不该升级…"| Client
